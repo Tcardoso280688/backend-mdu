@@ -6,6 +6,12 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
 from .extensions import db
 from .models import Usuario
+from .extensions import db
+from .routes.auth import auth_bp
+from .routes.projects import projects_bp
+from .routes.users import users_bp
+from .routes.logs import logs_bp
+
 
 bcrypt = Bcrypt()
 jwt = JWTManager()
