@@ -1,4 +1,7 @@
 import os
+import re
+from urllib.parse import urlparse
+
 from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
@@ -19,15 +22,15 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///mdu.db')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-    # Engine mais resiliente (pré-ping, reciclagem e SSL por garantia)
+    # Engine mais resiliente (pré-ping, reciclagem e SSL)
     app.config.setdefault('SQLALCHEMY_ENGINE_OPTIONS', {})
     app.config['SQLALCHEMY_ENGINE_OPTIONS'].update({
         'pool_pre_ping': True,
         'pool_recycle': 300,
-        'connect_args': {'sslmode': 'require'}  # reforça o SSL mesmo já estando na URL
+        'connect_args': {'sslmode': 'require'}  # reforça SSL mesmo já estando na URL
     })
 
-    # CORS: libere apenas seu Netlify (ou * para teste)
+    # CORS: libere o seu domínio do Netlify
     CORS(app, resources={r"/api/*": {"origins": os.getenv("NETLIFY_ORIGIN", "*")}})
 
     # ------------------ Extensões ------------------
@@ -50,21 +53,37 @@ def create_app():
     def health():
         return jsonify(status="ok"), 200
 
-    # ROTA TEMPORÁRIA de diagnóstico do banco (não deixa o boot cair)
+    # ROTA TEMPORÁRIA de diagnóstico do banco (não derruba o boot)
     @app.get("/dbhealth")
     def dbhealth():
         try:
             db.session.execute(text("SELECT 1"))
             return jsonify(db="ok"), 200
         except Exception as e:
-            # devolve a mensagem exata do Postgres/driver
             return jsonify(db="error", error=str(e)), 500
+
+    # ROTA TEMPORÁRIA para ver o que a app está lendo de DATABASE_URL
+    @app.get("/cfg")
+    def cfg():
+        url = os.getenv("DATABASE_URL", "")
+        masked = re.sub(r":([^:@/\?]+)@", r":********@", url)
+        try:
+            p = urlparse(url)
+            who = p.username or ""
+            host = p.hostname or ""
+            return jsonify(
+                database_url=masked,
+                parsed_username=who,
+                parsed_host=host
+            ), 200
+        except Exception as e:
+            return jsonify(database_url=masked, error=str(e)), 200
 
     # ------------------ Init do DB protegida ------------------
     with app.app_context():
         try:
             db.create_all()
-            # só faz seed se o banco respondeu
+            # só tenta seed se o banco respondeu
             db.session.execute(text("SELECT 1"))
             _seed_admin()
         except Exception as e:
@@ -79,7 +98,7 @@ def _seed_admin():
     if not email:
         return
 
-    # evita duplicar
+    # Evita duplicar
     if Usuario.query.filter_by(email=email).first():
         return
 
@@ -87,15 +106,12 @@ def _seed_admin():
     senha = os.getenv('ADMIN_PASSWORD', '123456')
     perfil = os.getenv('ADMIN_ROLE', 'admin')
 
-    # ATENÇÃO: use o MESMO campo do seu models.py
-    # - se o seu modelo tiver 'password_hash', troque a linha abaixo para 'password_hash=...'
     admin = Usuario(
         nome=nome,
         email=email,
         senha_hash=hash_password(senha)
     )
-
-    # se o seu modelo tiver atributo 'perfil'
+    # atribui perfil se existir no modelo
     try:
         admin.perfil = perfil
     except Exception:
